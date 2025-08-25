@@ -8,7 +8,7 @@
 4. [Instalacja aplikacji](#instalacja-aplikacji)
 5. [Konfiguracja bazy danych](#konfiguracja-bazy-danych)
 6. [Konfiguracja Nginx](#konfiguracja-nginx)
-7. [Konfiguracja SSL](#konfiguracja-ssl)
+7. [Konfiguracja SSL z Cloudflare](#konfiguracja-ssl-z-cloudflare)
 8. [Uruchomienie jako serwis](#uruchomienie-jako-serwis)
 9. [Zabezpieczenia](#zabezpieczenia)
 10. [Tworzenie pierwszego administratora](#tworzenie-pierwszego-administratora)
@@ -96,12 +96,6 @@ systemctl start nginx
 systemctl enable nginx
 ```
 
-### Certbot (dla SSL)
-
-```bash
-apt install -y certbot python3-certbot-nginx
-```
-
 ---
 
 ## Instalacja aplikacji
@@ -113,24 +107,16 @@ mkdir -p /opt/posmiewiska
 cd /opt/posmiewiska
 ```
 
-### Pobieranie i rozpakowanie aplikacji
-
-Skopiuj pliki aplikacji na serwer (przez SCP, SFTP lub Git):
+### Pobieranie kodu źródłowego z GitHub
 
 ```bash
-# Jeśli masz archiwum
-tar -xzf posmiewiska-final.tar.gz
-mv posmiewiska-backend/* .
-rmdir posmiewiska-backend
-
-# Lub jeśli kopiujesz bezpośrednio
-# scp -r posmiewiska-backend/* root@your-server:/opt/posmiewiska/
+git clone https://github.com/CorekMeister/posm .
 ```
 
 ### Konfiguracja środowiska Python
 
 ```bash
-cd /opt/posmiewiska
+cd /opt/posmiewiska/posmiewiska-backend
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -143,10 +129,10 @@ pip install gunicorn
 Edytuj plik `gunicorn.conf.py`:
 
 ```bash
-nano gunicorn.conf.py
+nano /opt/posmiewiska/posmiewiska-backend/gunicorn.conf.py
 ```
 
-Zmień zawartość na:
+Upewnij się, że `user` i `group` są ustawione na `root`:
 
 ```python
 # Gunicorn configuration file for root installation
@@ -169,17 +155,17 @@ secure_scheme_headers = {
 }
 ```
 
-### Konfiguracja środowiska
+### Konfiguracja środowiska (.env)
 
-Utwórz plik `.env`:
+Utwórz plik `.env` w katalogu `/opt/posmiewiska/posmiewiska-backend`:
 
 ```bash
-nano .env
+nano /opt/posmiewiska/posmiewiska-backend/.env
 ```
 
 ```env
 # Konfiguracja bazy danych
-DATABASE_URL=sqlite:////opt/posmiewiska/database/app.db
+DATABASE_URL=sqlite:////opt/posmiewiska/posmiewiska-backend/database/app.db
 
 # Konfiguracja Flask
 FLASK_ENV=production
@@ -191,15 +177,29 @@ CORS_ORIGINS=https://posmiewiska.pl,https://www.posmiewiska.pl
 
 # Konfiguracja Minotar
 MINOTAR_CACHE_HOURS=24
-MINOTAR_CACHE_DIR=/opt/posmiewiska/avatar_cache
+MINOTAR_CACHE_DIR=/opt/posmiewiska/posmiewiska-backend/avatar_cache
+```
+
+### Budowanie frontendu
+
+```bash
+cd /opt/posmiewiska/posmiewiska-frontend
+pnpm install
+pnpm run build
+```
+
+### Kopiowanie zbudowanego frontendu do backendu
+
+```bash
+cp -r /opt/posmiewiska/posmiewiska-frontend/dist/* /opt/posmiewiska/posmiewiska-backend/src/static/
 ```
 
 ### Tworzenie katalogów
 
 ```bash
-mkdir -p /opt/posmiewiska/database
-mkdir -p /opt/posmiewiska/avatar_cache
-mkdir -p /opt/posmiewiska/logs
+mkdir -p /opt/posmiewiska/posmiewiska-backend/database
+mkdir -p /opt/posmiewiska/posmiewiska-backend/avatar_cache
+mkdir -p /opt/posmiewiska/posmiewiska-backend/logs
 ```
 
 ---
@@ -209,14 +209,14 @@ mkdir -p /opt/posmiewiska/logs
 ### Inicjalizacja bazy danych SQLite
 
 ```bash
-cd /opt/posmiewiska
+cd /opt/posmiewiska/posmiewiska-backend
 source venv/bin/activate
 python -c "
 from src.models.user import db
 from src.main import app
 with app.app_context():
     db.create_all()
-    print('Baza danych została utworzona.')
+    print(\'Baza danych została utworzona.\')
 "
 ```
 
@@ -253,7 +253,7 @@ server {
     listen 80;
     server_name posmiewiska.pl www.posmiewiska.pl;
     
-    # Przekierowanie HTTP na HTTPS (zostanie skonfigurowane przez Certbot)
+    # Przekierowanie HTTP na HTTPS
     return 301 https://$server_name$request_uri;
 }
 
@@ -261,9 +261,9 @@ server {
     listen 443 ssl http2;
     server_name posmiewiska.pl www.posmiewiska.pl;
     
-    # Certyfikaty SSL (zostaną dodane przez Certbot)
-    # ssl_certificate /etc/letsencrypt/live/posmiewiska.pl/fullchain.pem;
-    # ssl_certificate_key /etc/letsencrypt/live/posmiewiska.pl/privkey.pem;
+    # Certyfikaty SSL Cloudflare Origin (zostaną dodane ręcznie)
+    ssl_certificate /etc/nginx/ssl/posmiewiska.pl.pem;
+    ssl_certificate_key /etc/nginx/ssl/posmiewiska.pl.key;
     
     # Nowoczesne ustawienia SSL
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -303,7 +303,7 @@ server {
     
     # Statyczne pliki
     location /static/ {
-        alias /opt/posmiewiska/src/static/;
+        alias /opt/posmiewiska/posmiewiska-backend/src/static/;
         expires 1y;
         add_header Cache-Control "public, immutable";
         access_log off;
@@ -311,7 +311,7 @@ server {
     
     # Cache awatarów
     location /avatars/ {
-        alias /opt/posmiewiska/avatar_cache/;
+        alias /opt/posmiewiska/posmiewiska-backend/avatar_cache/;
         expires 1d;
         add_header Cache-Control "public";
         access_log off;
@@ -352,26 +352,42 @@ systemctl reload nginx
 
 ---
 
-## Konfiguracja SSL
+## Konfiguracja SSL z Cloudflare
 
-### Let's Encrypt
+Jeśli używasz Cloudflare jako proxy, możesz skonfigurować SSL w trybie "Full (strict)". Wymaga to wygenerowania certyfikatu Origin w panelu Cloudflare i umieszczenia go na serwerze.
+
+1.  **W panelu Cloudflare** przejdź do zakładki **SSL/TLS** -> **Origin Server**.
+2.  Kliknij **Create Certificate**.
+3.  Wybierz opcję **Generate private key and CSR with Cloudflare**.
+4.  W sekcji **Hostnames** upewnij się, że Twoja domena (np. `posmiewiska.pl` i `*.posmiewiska.pl`) jest uwzględniona.
+5.  Wybierz **Certificate Validity** (np. 15 lat).
+6.  Kliknij **Create**.
+7.  Skopiuj zawartość **Origin Certificate** i **Private Key**.
+
+8.  **Na serwerze utwórz katalog na certyfikaty i wklej klucze:**
 
 ```bash
-certbot --nginx -d posmiewiska.pl -d www.posmiewiska.pl
+mkdir -p /etc/nginx/ssl
+nano /etc/nginx/ssl/posmiewiska.pl.pem
+# Wklej zawartość Origin Certificate
+
+nano /etc/nginx/ssl/posmiewiska.pl.key
+# Wklej zawartość Private Key
+
+chmod 600 /etc/nginx/ssl/posmiewiska.pl.key
 ```
 
-Postępuj zgodnie z instrukcjami. Certbot automatycznie zaktualizuje konfigurację Nginx.
+9.  **Upewnij się, że w konfiguracji Nginx** (`/etc/nginx/sites-available/posmiewiska.pl`) masz następujące linie:
 
-### Automatyczne odnawianie
+```nginx
+    ssl_certificate /etc/nginx/ssl/posmiewiska.pl.pem;
+    ssl_certificate_key /etc/nginx/ssl/posmiewiska.pl.key;
+```
+
+10. **Przeładuj Nginx** aby zastosować zmiany:
 
 ```bash
-crontab -e
-```
-
-Dodaj linię:
-
-```
-0 12 * * * /usr/bin/certbot renew --quiet
+systemctl reload nginx
 ```
 
 ---
@@ -393,10 +409,10 @@ After=network.target
 Type=exec
 User=root
 Group=root
-WorkingDirectory=/opt/posmiewiska
-Environment=PATH=/opt/posmiewiska/venv/bin
-EnvironmentFile=/opt/posmiewiska/.env
-ExecStart=/opt/posmiewiska/venv/bin/gunicorn -c gunicorn.conf.py src.main:app
+WorkingDirectory=/opt/posmiewiska/posmiewiska-backend
+Environment=PATH=/opt/posmiewiska/posmiewiska-backend/venv/bin
+EnvironmentFile=/opt/posmiewiska/posmiewiska-backend/.env
+ExecStart=/opt/posmiewiska/posmiewiska-backend/venv/bin/gunicorn -c gunicorn.conf.py src.main:app
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
 RestartSec=10
@@ -481,14 +497,14 @@ dpkg-reconfigure -plow unattended-upgrades
 ### Skrypt do tworzenia administratora
 
 ```bash
-nano /opt/posmiewiska/create_admin.py
+nano /opt/posmiewiska/posmiewiska-backend/create_admin.py
 ```
 
 ```python
 #!/usr/bin/env python3
 import sys
 import os
-sys.path.append('/opt/posmiewiska')
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.models.user import db
 from src.models.admin import Admin
@@ -496,11 +512,12 @@ from src.main import app
 from werkzeug.security import generate_password_hash
 
 def create_admin(username, password):
+    """Tworzy nowego administratora"""
     with app.app_context():
         # Sprawdź czy admin już istnieje
         existing_admin = Admin.query.filter_by(username=username).first()
         if existing_admin:
-            print(f"Administrator '{username}' już istnieje!")
+            print(f"❌ Administrator '{username}' już istnieje!")
             return False
         
         # Utwórz nowego administratora
@@ -509,40 +526,149 @@ def create_admin(username, password):
             password=generate_password_hash(password)
         )
         
-        db.session.add(admin)
-        db.session.commit()
+        try:
+            db.session.add(admin)
+            db.session.commit()
+            print(f"✅ Administrator '{username}' został utworzony pomyślnie!")
+            return True
+        except Exception as e:
+            db.session.rollback()
+            print(f"❌ Błąd podczas tworzenia administratora: {e}")
+            return False
+
+def list_admins():
+    """Wyświetla listę administratorów"""
+    with app.app_context():
+        admins = Admin.query.all()
+        if not admins:
+            print("Brak administratorów w systemie.")
+        else:
+            print("Lista administratorów:")
+            for admin in admins:
+                print(f"- {admin.username} (ID: {admin.id})")
+
+def delete_admin(username):
+    """Usuwa administratora"""
+    with app.app_context():
+        admin = Admin.query.filter_by(username=username).first()
+        if not admin:
+            print(f"❌ Administrator '{username}' nie istnieje!")
+            return False
         
-        print(f"Administrator '{username}' został utworzony pomyślnie!")
-        return True
+        try:
+            db.session.delete(admin)
+            db.session.commit()
+            print(f"✅ Administrator '{username}' został usunięty!")
+            return True
+        except Exception as e:
+            db.session.rollback()
+            print(f"❌ Błąd podczas usuwania administratora: {e}")
+            return False
+
+def change_password(username, new_password):
+    """Zmienia hasło administratora"""
+    with app.app_context():
+        admin = Admin.query.filter_by(username=username).first()
+        if not admin:
+            print(f"❌ Administrator '{username}' nie istnieje!")
+            return False
+        
+        try:
+            admin.password = generate_password_hash(new_password)
+            db.session.commit()
+            print(f"✅ Hasło administratora '{username}' zostało zmienione!")
+            return True
+        except Exception as e:
+            db.session.rollback()
+            print(f"❌ Błąd podczas zmiany hasła: {e}")
+            return False
+
+def print_usage():
+    """Wyświetla instrukcję użycia"""
+    print("Użycie:")
+    print("  python create_admin.py create <username> <password>  - Tworzy nowego administratora")
+    print("  python create_admin.py list                         - Wyświetla listę administratorów")
+    print("  python create_admin.py delete <username>            - Usuwa administratora")
+    print("  python create_admin.py password <username> <password> - Zmienia hasło administratora")
+    print("")
+    print("Przykłady:")
+    print("  python create_admin.py create admin mojeSilneHaslo123")
+    print("  python create_admin.py list")
+    print("  python create_admin.py delete admin")
+    print("  python create_admin.py password admin noweHaslo456")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Użycie: python create_admin.py <username> <password>")
+    if len(sys.argv) < 2:
+        print_usage()
         sys.exit(1)
     
-    username = sys.argv[1]
-    password = sys.argv[2]
+    command = sys.argv[1].lower()
     
-    if len(password) < 6:
-        print("Hasło musi mieć co najmniej 6 znaków!")
+    if command == "create":
+        if len(sys.argv) != 4:
+            print("❌ Błędna liczba argumentów dla komendy 'create'")
+            print("Użycie: python create_admin.py create <username> <password>")
+            sys.exit(1)
+        
+        username = sys.argv[2]
+        password = sys.argv[3]
+        
+        if len(username) < 3:
+            print("❌ Nazwa użytkownika musi mieć co najmniej 3 znaki!")
+            sys.exit(1)
+        
+        if len(password) < 6:
+            print("❌ Hasło musi mieć co najmniej 6 znaków!")
+            sys.exit(1)
+        
+        create_admin(username, password)
+    
+    elif command == "list":
+        list_admins()
+    
+    elif command == "delete":
+        if len(sys.argv) != 3:
+            print("❌ Błędna liczba argumentów dla komendy 'delete'")
+            print("Użycie: python create_admin.py delete <username>")
+            sys.exit(1)
+        
+        username = sys.argv[2]
+        delete_admin(username)
+    
+    elif command == "password":
+        if len(sys.argv) != 4:
+            print("❌ Błędna liczba argumentów dla komendy 'password'")
+            print("Użycie: python create_admin.py password <username> <new_password>")
+            sys.exit(1)
+        
+        username = sys.argv[2]
+        new_password = sys.argv[3]
+        
+        if len(new_password) < 6:
+            print("❌ Hasło musi mieć co najmniej 6 znaków!")
+            sys.exit(1)
+        
+        change_password(username, new_password)
+    
+    else:
+        print(f"❌ Nieznana komenda: {command}")
+        print_usage()
         sys.exit(1)
-    
-    create_admin(username, password)
 ```
 
 ```bash
-chmod +x /opt/posmiewiska/create_admin.py
+chmod +x /opt/posmiewiska/posmiewiska-backend/create_admin.py
 ```
 
 ### Tworzenie administratora
 
 ```bash
-cd /opt/posmiewiska
+cd /opt/posmiewiska/posmiewiska-backend
 source venv/bin/activate
-python create_admin.py admin twoje_haslo_tutaj
+python create_admin.py create admin twoje_silne_haslo
 ```
 
-**WAŻNE**: Zmień `twoje_haslo_tutaj` na silne hasło!
+**WAŻNE**: Zmień `twoje_silne_haslo` na silne hasło!
 
 ---
 
@@ -568,19 +694,19 @@ tail -f /var/log/nginx/posmiewiska_error.log
 ### Backup bazy danych
 
 ```bash
-nano /opt/posmiewiska/backup.sh
+nano /opt/posmiewiska/posmiewiska-backend/backup.sh
 ```
 
 ```bash
 #!/bin/bash
-BACKUP_DIR="/opt/posmiewiska/backups"
+BACKUP_DIR="/opt/posmiewiska/posmiewiska-backend/backups"
 DATE=$(date +%Y%m%d_%H%M%S)
 
 mkdir -p $BACKUP_DIR
 
 # Backup SQLite
-if [ -f "/opt/posmiewiska/database/app.db" ]; then
-    cp /opt/posmiewiska/database/app.db $BACKUP_DIR/app_$DATE.db
+if [ -f "/opt/posmiewiska/posmiewiska-backend/database/app.db" ]; then
+    cp /opt/posmiewiska/posmiewiska-backend/database/app.db $BACKUP_DIR/app_$DATE.db
 fi
 
 # Usuń stare backupy (starsze niż 30 dni)
@@ -590,33 +716,41 @@ echo "Backup completed: $DATE"
 ```
 
 ```bash
-chmod +x /opt/posmiewiska/backup.sh
+chmod +x /opt/posmiewiska/posmiewiska-backend/backup.sh
 crontab -e
 ```
 
 Dodaj:
 
 ```
-0 2 * * * /opt/posmiewiska/backup.sh >> /opt/posmiewiska/logs/backup.log 2>&1
+0 2 * * * /opt/posmiewiska/posmiewiska-backend/backup.sh >> /opt/posmiewiska/posmiewiska-backend/logs/backup.log 2>&1
 ```
 
 ### Aktualizacja aplikacji
 
 ```bash
 # 1. Backup
-/opt/posmiewiska/backup.sh
+/opt/posmiewiska/posmiewiska-backend/backup.sh
 
 # 2. Zatrzymaj aplikację
 systemctl stop posmiewiska
 
-# 3. Zaktualizuj kod (skopiuj nowe pliki)
-
-# 4. Zaktualizuj zależności
+# 3. Zaktualizuj kod (pobierz najnowsze zmiany z Git)
 cd /opt/posmiewiska
+git pull origin master # lub nazwa Twojej gałęzi
+
+# 4. Zbuduj frontend ponownie
+cd /opt/posmiewiska/posmiewiska-frontend
+pnpm install
+pnpm run build
+cp -r /opt/posmiewiska/posmiewiska-frontend/dist/* /opt/posmiewiska/posmiewiska-backend/src/static/
+
+# 5. Zaktualizuj zależności Python
+cd /opt/posmiewiska/posmiewiska-backend
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 5. Uruchom aplikację
+# 6. Uruchom aplikację
 systemctl start posmiewiska
 systemctl status posmiewiska
 ```
@@ -634,7 +768,7 @@ systemctl status posmiewiska
 journalctl -u posmiewiska -n 50
 
 # Sprawdź konfigurację
-cd /opt/posmiewiska
+cd /opt/posmiewiska/posmiewiska-backend
 source venv/bin/activate
 python -c "from src.main import app; print('OK')"
 
@@ -658,10 +792,10 @@ systemctl status nginx
 
 ```bash
 # Sprawdź certyfikaty
-certbot certificates
+ls -la /etc/nginx/ssl/
 
-# Odnów certyfikaty
-certbot renew --dry-run
+# Sprawdź konfigurację SSL
+openssl s_client -connect posmiewiska.pl:443
 ```
 
 ### Przydatne komendy
@@ -692,18 +826,18 @@ systemctl restart nginx posmiewiska
 
 Po zakończeniu instalacji, przetestuj aplikację:
 
-1. **Otwórz przeglądarkę** i przejdź do `https://posmiewiska.pl`
-2. **Sprawdź stronę główną** - powinna wyświetlać się lista graczy
-3. **Kliknij "Panel Administratora"**
-4. **Zaloguj się** używając utworzonych danych administratora
-5. **Dodaj testowego gracza** w panelu administracyjnym
-6. **Sprawdź czy gracz pojawia się** na stronie głównej
+1.  **Otwórz przeglądarkę** i przejdź do `https://posmiewiska.pl`
+2.  **Sprawdź stronę główną** - powinna wyświetlać się lista graczy
+3.  **Kliknij "Panel Administratora"**
+4.  **Zaloguj się** używając utworzonych danych administratora
+5.  **Dodaj testowego gracza** w panelu administracyjnym
+6.  **Sprawdź czy gracz pojawia się** na stronie głównej
 
 ---
 
 **Autor**: Manus AI  
 **Data**: 2025  
-**Wersja**: 2.0 (Root Installation)
+**Wersja**: 2.1 (Root Installation, Cloudflare SSL, Git)
 
-Ta instrukcja została przygotowana specjalnie dla instalacji jako użytkownik root bez tworzenia dodatkowych użytkowników systemowych.
+Ta instrukcja została przygotowana specjalnie dla instalacji jako użytkownik root z wykorzystaniem Cloudflare SSL i pobieraniem kodu z GitHuba.
 
