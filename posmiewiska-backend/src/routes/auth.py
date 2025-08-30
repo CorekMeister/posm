@@ -215,7 +215,8 @@ def register_admin():
         if Admin.query.filter_by(username=username).first():
             return jsonify({'error': 'Nazwa użytkownika już istnieje'}), 409
         
-        if Admin.query.filter_by(email=email).first():
+        # Sprawdzenie emaila tylko jeśli nie jest pusty
+        if email and Admin.query.filter_by(email=email).first():
             return jsonify({'error': 'Adres email już istnieje'}), 409
         
         # Tworzenie nowego administratora
