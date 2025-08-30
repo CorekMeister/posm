@@ -5,35 +5,29 @@ import os
 # Dodaj ścieżkę do aplikacji
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from src.models.user import db
-from src.models.admin import Admin
-from src.main import app
-from werkzeug.security import generate_password_hash
+from flask import Flask
+from src.models.admin import Admin, db  # Załóżmy, że app i db są skonfigurowane w src.models.user lub podobnym miejscu
+from src.app import app  # Załóżmy, że app jest zdefiniowane w src.app
 
-def create_admin(username, password):
+def create_admin(username, password, email):
     """Tworzy nowego administratora"""
     with app.app_context():
-        # Sprawdź czy admin już istnieje
-        existing_admin = Admin.query.filter_by(username=username).first()
-        if existing_admin:
-            print(f"❌ Administrator '{username}' już istnieje!")
-            return False
-        
-        # Utwórz nowego administratora
-        admin = Admin(
-            username=username,
-            password_hash=generate_password_hash(password)
-        )
-        
         try:
+            if Admin.query.filter_by(username=username).first():
+                print(f"❌ Administrator z username '{username}' już istnieje.")
+                return
+            if Admin.query.filter_by(email=email).first():
+                print(f"❌ Administrator z email '{email}' już istnieje.")
+                return
+            
+            admin = Admin(username=username, email=email)
+            admin.set_password(password)
             db.session.add(admin)
             db.session.commit()
-            print(f"✅ Administrator '{username}' został utworzony pomyślnie!")
-            return True
+            print(f"✅ Administrator '{username}' został utworzony pomyślnie.")
         except Exception as e:
             db.session.rollback()
             print(f"❌ Błąd podczas tworzenia administratora: {e}")
-            return False
 
 def list_admins():
     """Wyświetla listę administratorów"""
@@ -85,13 +79,13 @@ def change_password(username, new_password):
 def print_usage():
     """Wyświetla instrukcję użycia"""
     print("Użycie:")
-    print("  python create_admin.py create <username> <password>  - Tworzy nowego administratora")
-    print("  python create_admin.py list                         - Wyświetla listę administratorów")
-    print("  python create_admin.py delete <username>            - Usuwa administratora")
-    print("  python create_admin.py password <username> <password> - Zmienia hasło administratora")
+    print("  python create_admin.py create <username> <password> <email>  - Tworzy nowego administratora")
+    print("  python create_admin.py list                                          - Wyświetla listę administratorów")
+    print("  python create_admin.py delete <username>                              - Usuwa administratora")
+    print("  python create_admin.py password <username> <new_password>            - Zmienia hasło administratora")
     print("")
     print("Przykłady:")
-    print("  python create_admin.py create admin mojeSilneHaslo123")
+    print("  python create_admin.py create admin mojeSilneHaslo123 admin@example.com")
     print("  python create_admin.py list")
     print("  python create_admin.py delete admin")
     print("  python create_admin.py password admin noweHaslo456")
@@ -104,13 +98,14 @@ if __name__ == "__main__":
     command = sys.argv[1].lower()
     
     if command == "create":
-        if len(sys.argv) != 4:
+        if len(sys.argv) != 5:
             print("❌ Błędna liczba argumentów dla komendy 'create'")
-            print("Użycie: python create_admin.py create <username> <password>")
+            print("Użycie: python create_admin.py create <username> <password> <email>")
             sys.exit(1)
         
         username = sys.argv[2]
         password = sys.argv[3]
+        email = sys.argv[4]
         
         if len(username) < 3:
             print("❌ Nazwa użytkownika musi mieć co najmniej 3 znaki!")
@@ -120,7 +115,7 @@ if __name__ == "__main__":
             print("❌ Hasło musi mieć co najmniej 6 znaków!")
             sys.exit(1)
         
-        create_admin(username, password)
+        create_admin(username, password, email)
     
     elif command == "list":
         list_admins()
@@ -148,6 +143,11 @@ if __name__ == "__main__":
             sys.exit(1)
         
         change_password(username, new_password)
+    
+    else:
+        print(f"❌ Nieznana komenda: {command}")
+        print_usage()
+        sys.exit(1)
     
     else:
         print(f"❌ Nieznana komenda: {command}")
