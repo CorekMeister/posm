@@ -22,7 +22,7 @@ def create_admin(username, password):
         # Utwórz nowego administratora
         admin = Admin(
             username=username,
-            password=generate_password_hash(password)
+            password_hash=generate_password_hash(password)
         )
         
         try:
@@ -73,7 +73,7 @@ def change_password(username, new_password):
             return False
         
         try:
-            admin.password = generate_password_hash(new_password)
+            admin.password_hash = generate_password_hash(new_password)
             db.session.commit()
             print(f"✅ Hasło administratora '{username}' zostało zmienione!")
             return True
